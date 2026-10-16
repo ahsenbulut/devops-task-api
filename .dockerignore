@@ -1,0 +1,19 @@
+# Allow-list: exclude everything, then include only what the Dockerfile copies.
+# New files (secrets, local data, tooling) stay out of the build context by default.
+# This excludes node_modules, dist, coverage, .git, .github, .env*, tests, docs and IDE files.
+*
+
+!package.json
+!package-lock.json
+!tsconfig.json
+!tsconfig.build.json
+!src/
+
+# Never send these, even if they end up under an allowed path.
+**/.env
+**/.env.*
+**/*.pem
+**/*.key
+**/.npmrc
+**/node_modules
+**/.DS_Store
