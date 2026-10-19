@@ -267,3 +267,157 @@ jobs:
             echo "| Trivy | ${TRIVY_VERSION}, no HIGH/CRITICAL findings |"
           } >> "${GITHUB_STEP_SUMMARY}"
           echo "Published ${TARGET} (${DIGEST}) for ${platforms}"
+
+  update-gitops:
+    name: Update GitOps repository
+    needs: [verify-ci, build-scan-publish]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: release
+    permissions:
+      contents: read
+    env:
+      SHA: ${{ needs.verify-ci.outputs.sha }}
+      IMAGE: ${{ needs.build-scan-publish.outputs.image }}
+      DIGEST: ${{ needs.build-scan-publish.outputs.digest }}
+      GITOPS_REPO: ahsenbulut/devops-task-gitops
+      OVERLAY: apps/task-api/overlays/dev
+    steps:
+      - name: Validate release outputs and published image
+        run: |
+          [[ "${SHA}" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::Invalid source SHA '${SHA}'"; exit 1; }
+          [[ "${DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::Invalid digest '${DIGEST}'"; exit 1; }
+          [[ "${IMAGE}" =~ ^docker\.io/[a-z0-9._-]+/${IMAGE_NAME}$ ]] || { echo "::error::Unexpected image '${IMAGE}'"; exit 1; }
+
+          manifest="$(docker buildx imagetools inspect "${IMAGE}@${DIGEST}" --format '{{json .Manifest}}')"
+          [[ "$(jq -r .digest <<< "${manifest}")" == "${DIGEST}" ]] || { echo "::error::${IMAGE}@${DIGEST} not found on Docker Hub"; exit 1; }
+          platforms="$(jq -r '[.manifests[] | select(.platform.os == "linux") | "linux/" + .platform.architecture] | sort | join(",")' <<< "${manifest}")"
+          [[ "${platforms}" == "${PLATFORMS}" ]] || { echo "::error::Expected ${PLATFORMS}, found ${platforms}"; exit 1; }
+
+          revisions="$(docker buildx imagetools inspect "${IMAGE}@${DIGEST}" --format '{{json .Image}}' \
+            | jq -r '[.[].config.Labels["org.opencontainers.image.revision"]] | unique | join(",")')"
+          [[ "${revisions}" == "${SHA}" ]] || { echo "::error::Image revision label '${revisions}' does not match ${SHA}"; exit 1; }
+          echo "Verified ${IMAGE}@${DIGEST} (${platforms}) built from ${SHA}"
+
+      - name: Checkout GitOps repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ env.GITOPS_REPO }}
+          ref: main
+          path: gitops
+          token: ${{ secrets.GITOPS_TOKEN }}
+          persist-credentials: false
+
+      - name: Update image digest and push
+        id: update
+        working-directory: gitops
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APP_REPO: ${{ github.repository }}
+          GITOPS_TOKEN: ${{ secrets.GITOPS_TOKEN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          kustomization="${OVERLAY}/kustomization.yaml"
+          auth="$(printf 'x-access-token:%s' "${GITOPS_TOKEN}" | base64 -w0)"
+          echo "::add-mask::${auth}"
+          git_auth() {
+            GIT_CONFIG_COUNT=1 \
+            GIT_CONFIG_KEY_0="http.https://github.com/.extraheader" \
+            GIT_CONFIG_VALUE_0="AUTHORIZATION: basic ${auth}" \
+            git "$@"
+          }
+          rendered_image() {
+            local images
+            images="$(kubectl kustomize "${OVERLAY}" | sed -n 's/^ *image: *//p')"
+            [[ "$(wc -l <<< "${images}")" == "1" ]] || { echo "::error::Expected one image in rendered manifests" >&2; return 1; }
+            echo "${images}"
+          }
+
+          status="$(gh api "repos/${APP_REPO}/compare/${SHA}...main" --jq .status)"
+          if [[ "${status}" != "identical" && "${status}" != "ahead" ]]; then
+            echo "::error::Commit ${SHA} is no longer part of main (compare status: ${status})"
+            exit 1
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898299+github-actions[bot]@users.noreply.github.com"
+          target="${IMAGE}@${DIGEST}"
+
+          for attempt in 1 2 3; do
+            git_auth fetch --quiet origin main
+            git reset --quiet --hard origin/main
+
+            current="$(rendered_image)"
+            if [[ "${current}" == "${target}" ]]; then
+              echo "GitOps already deploys ${target}; nothing to do"
+              echo "result=unchanged" >> "${GITHUB_OUTPUT}"
+              exit 0
+            fi
+            current_digest="${current##*@}"
+            [[ "${current}" == "${IMAGE}@${current_digest}" && "${current_digest}" =~ ^sha256:[0-9a-f]{64}$ ]] \
+              || { echo "::error::Unexpected current image reference '${current}'"; exit 1; }
+
+            deployed_sha="$(docker buildx imagetools inspect "${current}" --format '{{json .Image}}' \
+              | jq -r '[.[].config.Labels["org.opencontainers.image.revision"]] | unique | join(",")')"
+            [[ "${deployed_sha}" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::Cannot determine source commit of ${current}"; exit 1; }
+
+            order="$(gh api "repos/${APP_REPO}/compare/${deployed_sha}...${SHA}" --jq .status)"
+            case "${order}" in
+              ahead) ;;
+              behind|identical)
+                echo "::notice::Skipping stale release: ${SHA} is not newer than deployed ${deployed_sha}"
+                echo "result=stale" >> "${GITHUB_OUTPUT}"
+                exit 0 ;;
+              *)
+                echo "::error::Cannot order ${SHA} against deployed ${deployed_sha} (compare status: ${order})"
+                exit 1 ;;
+            esac
+
+            [[ "$(grep -c -F "${current_digest}" "${kustomization}")" == "1" ]] \
+              || { echo "::error::Expected exactly one '${current_digest}' in ${kustomization}"; exit 1; }
+            before="$(kubectl kustomize "${OVERLAY}")"
+            sed -i "s/${current_digest}/${DIGEST}/" "${kustomization}"
+            after="$(kubectl kustomize "${OVERLAY}")"
+
+            [[ "$(rendered_image)" == "${target}" ]] || { echo "::error::Rendered image does not match ${target}"; exit 1; }
+            changed="$(diff <(echo "${before}") <(echo "${after}") | grep -c '^[<>]' || true)"
+            [[ "${changed}" == "2" ]] || { echo "::error::Render changed ${changed} lines, expected only the image line"; exit 1; }
+            [[ "$(git status --porcelain)" == " M ${kustomization}" ]] || { echo "::error::Unexpected files changed"; git status --porcelain; exit 1; }
+
+            git commit --quiet -m "chore(deploy): update task-api image to ${SHA::7}" \
+              -m "Source commit: ${APP_REPO}@${SHA}" \
+              -m "Image: ${target}" \
+              -m "Release run: ${RUN_URL}" \
+              -- "${kustomization}"
+
+            if git_auth push --quiet origin HEAD:main; then
+              echo "Pushed $(git rev-parse HEAD) to ${GITOPS_REPO}@main"
+              echo "result=updated" >> "${GITHUB_OUTPUT}"
+              echo "commit=$(git rev-parse HEAD)" >> "${GITHUB_OUTPUT}"
+              exit 0
+            fi
+            echo "::warning::Push rejected (attempt ${attempt}), refetching main and re-evaluating"
+          done
+          echo "::error::Could not push to ${GITOPS_REPO} after 3 attempts"
+          exit 1
+
+      - name: Report result
+        if: ${{ always() }}
+        env:
+          RESULT: ${{ steps.update.outputs.result }}
+          COMMIT: ${{ steps.update.outputs.commit }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          if [[ "${JOB_STATUS}" != "success" ]]; then
+            echo "::error::GitOps update failed. ${IMAGE}@${DIGEST} WAS published to Docker Hub but is NOT deployed."
+          fi
+          {
+            echo "### GitOps update"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Image (published) | \`${IMAGE}@${DIGEST}\` |"
+            echo "| Source commit | \`${SHA}\` |"
+            echo "| GitOps result | ${RESULT:-failed} |"
+            echo "| GitOps commit | ${COMMIT:+https://github.com/${GITOPS_REPO}/commit/${COMMIT}} |"
+          } >> "${GITHUB_STEP_SUMMARY}"
