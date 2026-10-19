@@ -160,3 +160,43 @@ jobs:
       - name: Scan git history for secrets
         run: |
           "${RUNNER_TEMP}/gitleaks" git --redact --verbose --exit-code 1 .
+
+  sonarqube:
+    name: SonarQube analysis and Quality Gate
+    # Fork PRs get no secrets; the merged commit is analyzed on push to main before release.
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout (full history)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node.js (from .nvmrc) with npm cache
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Run tests with coverage
+        run: npm run test:coverage
+
+      - name: Verify LCOV report
+        run: |
+          test -s coverage/lcov.info || { echo "::error::coverage/lcov.info is missing or empty"; exit 1; }
+          files="$(grep -c '^SF:' coverage/lcov.info)"
+          outside="$(grep '^SF:' coverage/lcov.info | grep -vc '^SF:src/' || true)"
+          [[ "${files}" -gt 0 && "${outside}" == "0" ]] || { echo "::error::Unexpected LCOV content (files=${files}, outside src=${outside})"; exit 1; }
+          echo "LCOV covers ${files} source files under src/"
+
+      - name: SonarQube scan and Quality Gate
+        uses: SonarSource/sonarqube-scan-action@d209202bc7d53ff1cc128f7f907dac145c9d6ae9 # v8.3.0
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
