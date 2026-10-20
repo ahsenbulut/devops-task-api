@@ -4,6 +4,7 @@ export default defineConfig({
   test: {
     environment: 'node',
     include: ['tests/**/*.test.ts'],
+    fileParallelism: false,
     env: {
       LOG_LEVEL: 'silent',
     },

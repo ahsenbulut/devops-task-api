@@ -1,18 +1,18 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { ValidationError } from '../../src/errors.js';
 import { TaskService } from '../../src/services/task-service.js';
-import { TaskStore } from '../../src/store/task-store.js';
+import { MemoryTaskRepository } from '../helpers/memory-repository.js';
 
 describe('TaskService', () => {
   let service: TaskService;
 
   beforeEach(() => {
-    service = new TaskService(new TaskStore());
+    service = new TaskService(new MemoryTaskRepository());
   });
 
   describe('createTask', () => {
-    it('creates a task with a valid title and defaults', () => {
-      const task = service.createTask({ title: '  Write CI pipeline  ' });
+    it('creates a task with a valid title and defaults', async () => {
+      const task = await service.createTask({ title: '  Write CI pipeline  ' });
 
       expect(task).toMatchObject({
         title: 'Write CI pipeline',
@@ -21,11 +21,11 @@ describe('TaskService', () => {
       });
       expect(task.id).toMatch(/^[0-9a-f-]{36}$/);
       expect(new Date(task.createdAt).toISOString()).toBe(task.createdAt);
-      expect(service.getTask(task.id)).toEqual(task);
+      expect(await service.getTask(task.id)).toEqual(task);
     });
 
-    it('keeps optional description and completed fields', () => {
-      const task = service.createTask({
+    it('keeps optional description and completed fields', async () => {
+      const task = await service.createTask({
         title: 'Configure Argo CD',
         description: ' sync from GitOps repo ',
         completed: true,
@@ -35,8 +35,8 @@ describe('TaskService', () => {
       expect(task.completed).toBe(true);
     });
 
-    it('normalizes a blank description to null', () => {
-      expect(service.createTask({ title: 'x', description: '   ' }).description).toBeNull();
+    it('normalizes a blank description to null', async () => {
+      expect((await service.createTask({ title: 'x', description: '   ' })).description).toBeNull();
     });
 
     it.each([
@@ -46,9 +46,9 @@ describe('TaskService', () => {
       ['non-string title', { title: 42 }],
       ['null title', { title: null }],
       ['too long title', { title: 'a'.repeat(201) }],
-    ])('rejects %s', (_label, payload) => {
+    ])('rejects %s', async (_label, payload) => {
       expect(() => service.createTask(payload)).toThrow(ValidationError);
-      expect(service.listTasks()).toHaveLength(0);
+      expect(await service.listTasks()).toHaveLength(0);
     });
 
     it.each([
@@ -61,7 +61,7 @@ describe('TaskService', () => {
 
     it('rejects invalid optional fields and unknown fields with all messages', () => {
       try {
-        service.createTask({
+        void service.createTask({
           title: 'ok',
           description: 5,
           completed: 'yes',
@@ -86,17 +86,17 @@ describe('TaskService', () => {
   });
 
   describe('getTask', () => {
-    it('returns undefined for a non-existent task', () => {
-      expect(service.getTask('does-not-exist')).toBeUndefined();
+    it('returns undefined for a non-existent task', async () => {
+      expect(await service.getTask('does-not-exist')).toBeUndefined();
     });
   });
 
   describe('listTasks', () => {
-    it('returns created tasks in insertion order', () => {
-      const first = service.createTask({ title: 'first' });
-      const second = service.createTask({ title: 'second' });
+    it('returns created tasks in insertion order', async () => {
+      const first = await service.createTask({ title: 'first' });
+      const second = await service.createTask({ title: 'second' });
 
-      expect(service.listTasks()).toEqual([first, second]);
+      expect(await service.listTasks()).toEqual([first, second]);
     });
   });
 });

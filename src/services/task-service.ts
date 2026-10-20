@@ -6,7 +6,7 @@ import {
   type CreateTaskInput,
   type Task,
 } from '../models/task.js';
-import type { TaskStore } from '../store/task-store.js';
+import type { TaskRepository } from '../store/task-store.js';
 
 const ALLOWED_FIELDS = new Set(['title', 'description', 'completed']);
 
@@ -67,17 +67,17 @@ export function validateCreateTaskInput(payload: unknown): CreateTaskInput {
 }
 
 export class TaskService {
-  constructor(private readonly store: TaskStore) {}
+  constructor(private readonly store: TaskRepository) {}
 
-  listTasks(): Task[] {
+  listTasks(): Promise<Task[]> {
     return this.store.list();
   }
 
-  getTask(id: string): Task | undefined {
+  getTask(id: string): Promise<Task | undefined> {
     return this.store.get(id);
   }
 
-  createTask(payload: unknown): Task {
+  createTask(payload: unknown): Promise<Task> {
     const input = validateCreateTaskInput(payload);
     return this.store.save({
       id: randomUUID(),

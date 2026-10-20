@@ -1,16 +1,29 @@
-import type { Express } from 'express';
+import type pg from 'pg';
 import request from 'supertest';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createApp } from '../../src/app.js';
 import { TaskService } from '../../src/services/task-service.js';
 import { TaskStore } from '../../src/store/task-store.js';
+import { createTestPool, resetTasks } from '../helpers/database.js';
 
-describe('tasks API', () => {
-  let app: Express;
+describe('tasks API (PostgreSQL)', () => {
+  let pool: pg.Pool;
+  let app: ReturnType<typeof createApp>;
 
-  // A fresh app (and therefore a fresh in-memory store) per test keeps tests independent.
-  beforeEach(() => {
-    app = createApp();
+  beforeAll(async () => {
+    pool = await createTestPool();
+    app = createApp({
+      taskService: new TaskService(new TaskStore(pool)),
+      isReady: () => Promise.resolve(true),
+    });
+  });
+
+  beforeEach(async () => {
+    await resetTasks(pool);
+  });
+
+  afterAll(async () => {
+    await pool.end();
   });
 
   describe('GET /api/tasks', () => {
@@ -34,7 +47,7 @@ describe('tasks API', () => {
   });
 
   describe('POST /api/tasks', () => {
-    it('returns 201 and the created task for a valid payload', async () => {
+    it('returns 201 and persists the task in PostgreSQL', async () => {
       const res = await request(app)
         .post('/api/tasks')
         .send({ title: 'Set up GitHub Actions', description: 'CI pipeline' });
@@ -46,6 +59,14 @@ describe('tasks API', () => {
         completed: false,
       });
       expect(res.headers.location).toBe(`/api/tasks/${res.body.data.id}`);
+
+      const row = await pool.query(
+        'SELECT title, description, completed FROM tasks WHERE id = $1',
+        [res.body.data.id],
+      );
+      expect(row.rows).toEqual([
+        { title: 'Set up GitHub Actions', description: 'CI pipeline', completed: false },
+      ]);
     });
 
     it('returns 400 with validation details for an invalid payload', async () => {
@@ -90,6 +111,12 @@ describe('tasks API', () => {
       expect(res.status).toBe(404);
       expect(res.body.error.message).toMatch(/not found/);
     });
+
+    it('returns 404 (not 500) for an id that is not a UUID', async () => {
+      const res = await request(app).get('/api/tasks/does-not-exist');
+
+      expect(res.status).toBe(404);
+    });
   });
 
   describe('error handling', () => {
@@ -106,7 +133,10 @@ describe('tasks API', () => {
           throw new Error('boom: secret detail');
         }
       }
-      const failingApp = createApp({ taskService: new FailingService(new TaskStore()) });
+      const failingApp = createApp({
+        taskService: new FailingService(new TaskStore(pool)),
+        isReady: () => Promise.resolve(true),
+      });
 
       const res = await request(failingApp).get('/api/tasks');
 

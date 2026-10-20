@@ -1,11 +1,19 @@
 import { createApp } from './app.js';
 import { loadConfig } from './config.js';
+import { createPool } from './db.js';
 import { logger } from './logger.js';
+import { TaskService } from './services/task-service.js';
+import { TaskStore } from './store/task-store.js';
 
 const config = loadConfig();
 
 let shuttingDown = false;
-const app = createApp({ isReady: () => !shuttingDown });
+const pool = createPool();
+const store = new TaskStore(pool);
+const app = createApp({
+  taskService: new TaskService(store),
+  isReady: async () => !shuttingDown && (await store.checkReady()),
+});
 
 const server = app.listen(config.port, () => {
   logger.info('server started', { port: config.port, nodeEnv: process.env.NODE_ENV ?? 'unset' });
@@ -39,8 +47,16 @@ function shutdown(signal: NodeJS.Signals): void {
       logger.error('error during shutdown', { error: err.message });
       process.exit(1);
     }
-    logger.info('server closed, exiting');
-    process.exit(0);
+    pool.end().then(
+      () => {
+        logger.info('server and database pool closed, exiting');
+        process.exit(0);
+      },
+      (poolErr: unknown) => {
+        logger.error('error closing database pool', { error: String(poolErr) });
+        process.exit(1);
+      },
+    );
   });
   server.closeIdleConnections();
 }
