@@ -329,8 +329,8 @@ jobs:
           rendered_image() {
             local images
             images="$(kubectl kustomize "${OVERLAY}" | sed -n 's/^ *image: *//p')"
-            [[ "$(wc -l <<< "${images}")" == "1" ]] || { echo "::error::Expected one image in rendered manifests" >&2; return 1; }
-            echo "${images}"
+            [[ "$(grep -cF "${IMAGE}@" <<< "${images}" || true)" == "1" ]] || { echo "::error::Expected exactly one ${IMAGE} image in rendered manifests" >&2; return 1; }
+            grep -F "${IMAGE}@" <<< "${images}"
           }
 
           status="$(gh api "repos/${APP_REPO}/compare/${SHA}...main" --jq .status)"
