@@ -3,16 +3,21 @@ import { loadConfig } from './config.js';
 import { createPool } from './db.js';
 import { logger } from './logger.js';
 import { TaskService } from './services/task-service.js';
+import { TicketService } from './services/ticket-service.js';
 import { TaskStore } from './store/task-store.js';
+import { TicketStore } from './store/ticket-store.js';
 
 const config = loadConfig();
 
 let shuttingDown = false;
 const pool = createPool();
-const store = new TaskStore(pool);
+const taskStore = new TaskStore(pool);
+const ticketStore = new TicketStore(pool);
 const app = createApp({
-  taskService: new TaskService(store),
-  isReady: async () => !shuttingDown && (await store.checkReady()),
+  taskService: new TaskService(taskStore),
+  ticketService: new TicketService(ticketStore),
+  isReady: async () =>
+    !shuttingDown && (await taskStore.checkReady()) && (await ticketStore.checkReady()),
 });
 
 const server = app.listen(config.port, () => {

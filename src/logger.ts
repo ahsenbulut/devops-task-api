@@ -1,5 +1,7 @@
 type Level = 'debug' | 'info' | 'warn' | 'error';
 
+const SERVICE_NAME = process.env.SERVICE_NAME ?? 'opsdesk-api';
+
 const LEVEL_WEIGHT: Record<Level | 'silent', number> = {
   debug: 10,
   info: 20,
@@ -21,7 +23,13 @@ function write(level: Level, message: string, fields: Record<string, unknown> = 
   if (LEVEL_WEIGHT[level] < currentThreshold()) {
     return;
   }
-  const line = JSON.stringify({ time: new Date().toISOString(), level, message, ...fields });
+  const line = JSON.stringify({
+    time: new Date().toISOString(),
+    level,
+    service: SERVICE_NAME,
+    message,
+    ...fields,
+  });
   if (level === 'warn' || level === 'error') {
     process.stderr.write(line + '\n');
   } else {

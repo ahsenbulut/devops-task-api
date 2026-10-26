@@ -6,7 +6,7 @@ const UNTRACKED_PATHS = ['/metrics', '/health'];
 // Route template label (e.g. /api/tasks/:id), never the raw URL, to keep label cardinality bounded.
 // req.baseUrl is already reset when an error bubbles up to the app-level handler, so the mount path is
 // derived from originalUrl minus as many segments as the matched route template has.
-function routeLabel(req: Parameters<RequestHandler>[0]): string {
+export function routeLabel(req: Parameters<RequestHandler>[0]): string {
   const routePath = (req.route as { path?: string } | undefined)?.path;
   if (routePath === undefined) {
     return 'unmatched';

@@ -3,8 +3,10 @@ import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createApp } from '../../src/app.js';
 import { TaskService } from '../../src/services/task-service.js';
+import { TicketService } from '../../src/services/ticket-service.js';
 import { TaskStore } from '../../src/store/task-store.js';
 import { createTestPool } from '../helpers/database.js';
+import { MemoryTicketRepository } from '../helpers/memory-ticket-repository.js';
 
 describe('health endpoints', () => {
   let pool: pg.Pool;
@@ -20,7 +22,11 @@ describe('health endpoints', () => {
   });
 
   const app = (isReady: () => Promise<boolean>) =>
-    createApp({ taskService: new TaskService(store), isReady });
+    createApp({
+      taskService: new TaskService(store),
+      ticketService: new TicketService(new MemoryTicketRepository()),
+      isReady,
+    });
 
   it('GET /health/live returns 200', async () => {
     const res = await request(app(() => store.checkReady())).get('/health/live');

@@ -2,7 +2,9 @@ import request from 'supertest';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createApp } from '../../src/app.js';
 import { TaskService } from '../../src/services/task-service.js';
+import { TicketService } from '../../src/services/ticket-service.js';
 import { MemoryTaskRepository } from '../helpers/memory-repository.js';
+import { MemoryTicketRepository } from '../helpers/memory-ticket-repository.js';
 
 describe('GET /metrics', () => {
   let app: ReturnType<typeof createApp>;
@@ -10,6 +12,7 @@ describe('GET /metrics', () => {
   beforeEach(() => {
     app = createApp({
       taskService: new TaskService(new MemoryTaskRepository()),
+      ticketService: new TicketService(new MemoryTicketRepository()),
       isReady: () => Promise.resolve(true),
     });
   });

@@ -3,8 +3,10 @@ import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createApp } from '../../src/app.js';
 import { TaskService } from '../../src/services/task-service.js';
+import { TicketService } from '../../src/services/ticket-service.js';
 import { TaskStore } from '../../src/store/task-store.js';
 import { createTestPool, resetTasks } from '../helpers/database.js';
+import { MemoryTicketRepository } from '../helpers/memory-ticket-repository.js';
 
 describe('tasks API (PostgreSQL)', () => {
   let pool: pg.Pool;
@@ -14,6 +16,7 @@ describe('tasks API (PostgreSQL)', () => {
     pool = await createTestPool();
     app = createApp({
       taskService: new TaskService(new TaskStore(pool)),
+      ticketService: new TicketService(new MemoryTicketRepository()),
       isReady: () => Promise.resolve(true),
     });
   });
@@ -135,6 +138,7 @@ describe('tasks API (PostgreSQL)', () => {
       }
       const failingApp = createApp({
         taskService: new FailingService(new TaskStore(pool)),
+        ticketService: new TicketService(new MemoryTicketRepository()),
         isReady: () => Promise.resolve(true),
       });
 
