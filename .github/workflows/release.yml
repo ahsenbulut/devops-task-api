@@ -328,7 +328,7 @@ jobs:
           }
           rendered_image() {
             local images
-            images="$(kubectl kustomize "${OVERLAY}" | sed -n 's/^ *image: *//p')"
+            images="$(kubectl kustomize "${OVERLAY}" | sed -n -E 's/^ *(- )?image: *//p')"
             [[ "$(grep -cF "${IMAGE}@" <<< "${images}" || true)" == "1" ]] || { echo "::error::Expected exactly one ${IMAGE} image in rendered manifests" >&2; return 1; }
             grep -F "${IMAGE}@" <<< "${images}"
           }
